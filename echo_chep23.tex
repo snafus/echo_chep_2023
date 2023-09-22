@@ -16,7 +16,8 @@
 % Put here some packages required or/and some personnal commands
 \usepackage{url}
 % \usepackage{cite}
-
+\usepackage{lineno}
+\linenumbers
 %
 \begin{document}
 %
@@ -37,11 +38,10 @@
 \institute{STFC Rutherford Appleton Lab, Harwell, UK}
 
 \abstract{%
-Data access at the UK Tier-1 facility at RAL is provided through its ECHO storage, serving the requirements for the WLGC and increasing numbers of other HEP and astronomy related communities.
+Data storage at the UK Tier-1 facility at RAL is provided through its ECHO storage, serving the requirements for the WLGC and increasing numbers of other HEP and astronomy related communities.
 ECHO is a Ceph-backed erasure-coded object store, currently providing in excess of 40PB of usable space, with frontend access to data provided via XRootD or gridFTP, using the libradosstriper library of Ceph. 
 The storage must service the needs of: high-throughput compute, with staged and direct file access passing through an XCache on each workernode; data access to compute running at storageless satellite sites; and, managed inter-site data transfers using the recently adopted HTTPS protocol (via WebDav), which includes multi-hop data transfers to and from RAL's newly commissioned CTA tape endpoint.
-A review of the experiences of providing data access via an object store within these data workflows is presented, including the details of the improvements necessary for the transition to WebDav, used for most inter-site data movements, and enhancements for direct-IO file access, where the development and optimisation of buffering and range coalescence strategies is explored.
-In addition to serving the requirements of LHC Run-3, preparations for Run-4 and for large astronomy experiments is underway. One example is with ROOT-based data formats, where the evolution from a TTree to RNTuple data structure provides an opportunity for storage providers to benchmark and optimise against this new format. A comparison of the current performance between data formats within ECHO is presented and the details of potential improvements presented.}
+A review of the experiences of providing data access via an object store within these data workflows is presented, including the details of the improvements necessary for the transition to WebDav, used for most inter-site data movements, and enhancements for direct-IO file access, where the development and optimisation of buffering and vector read strategies is explored.}
 %
 \maketitle
 %
@@ -49,9 +49,9 @@ In addition to serving the requirements of LHC Run-3, preparations for Run-4 and
 The Rutherford Appleton Laboratory (RAL) plays a crucial role in supporting the data-intensive requirements of the Worldwide LHC Computing Grid (WLCG). To facilitate efficient data access and storage for high-energy physics experiments, RAL has established the ECHO~\cite{dewhurst2017deployment,echoChep20} infrastructure. This infrastructure combines the XRootD~\cite{xrootd} and Ceph~\cite{ceph} technologies to provide a robust and scalable solution for handling vast amounts of data.
 
 One of the primary use cases is the distribution of experimental data generated at various Large Hadron Collider (LHC) experiments, i.e. ALICE, ATLAS, CMS and LHCb. The ECHO cluster employs XRootD as a high-performance data interface allowing researchers worldwide to efficiently retrieve and replicate these datasets for analysis.
-To enhance data redundancy and reliability, the ECHO infrastructure leverages Ceph's distributed storage capabilities. This redundancy ensures that data remains accessible, even in the face of hardware failures or other unforeseen issues. Erasure coding with $8+3$ is used for the pools holding data from the Experiements. 
+To enhance data redundancy and reliability, the ECHO infrastructure leverages Ceph's distributed storage capabilities. This redundancy ensures that data remains accessible, even in the face of hardware failures or other unforeseen issues. 
 
-In preparation for Run-3 of the LHC and to prepare for the requirements of HL-LHC, a number of optimisations and updates have occured since the original deployement of ECHO, such as the migration~\cite{Bockelman_2020} from gridFTP~\cite{allcock2001gridftp} to WebDav~\cite{webdav}. 
+In preparation for Run-3 of the LHC, and to prepare for the requirements of HL-LHC, a number of optimisations and updates have occured since the original deployement of ECHO, such as the migration~\cite{Bockelman_2020} from gridFTP~\cite{allcock2001gridftp} to WebDav~\cite{webdav}. 
 A review of the changes to ECHO to meet these challenges that have been adapted so far, focusing on XRootD, is provided in this note. 
 
 \section{ECHO and the Ceph storage cluster\label{ceph}}
@@ -64,7 +64,7 @@ A host level failure domain is used, such that the distribution of data in place
 
 \subsection{Data storage\label{datastore}}
 While RAL and its ceph storage provides for CephFS, S3 and SWIFT endpoints, the data stored for the experiments uses the ceph as an Object Store, interacting at the rados layer using functionality provided by the libradosstriper~\cite{libradosstriper} and {\em XrdCeph}~\cite{libradosstriper} plugin to XRootD (described below). 
-In practice, with the implementation for ECHO, this means that a file writen to echo is divided into $64$~MiB ceph objects, with name suffixed with a 16-digit 0-padded hex number (incrementing by one for each object) before being written into Ceph, and with the EC applied. Figure~\ref{fig_striper} illustrates the way a typcial file would be stored on ECHO. In Fig.~\ref{fig_osddist}, the distribution of data across OSDs and SNs is shown. In this example the file is divided into 157 ceph objects, which are placed over 1400 OSDs on approximately 230 SNs. i.e. data occupies approximately 6 OSDs per SN and a large (say 10~GiB) is likely to be distributed across most SNs of the ceph cluster. 
+In practice, with the implementation of ECHO, this means that a file writen to echo is divided into $64$~MiB ceph objects, with name suffixed with a 16-digit 0-padded hex number (incrementing by one for each object) before being written into Ceph, and with the EC applied. Figure~\ref{fig_striper} illustrates the way a typcial file would be stored on ECHO. In Fig.~\ref{fig_osddist}, the distribution of data across OSDs and SNs is shown. In this example, the file is divided into 157~ceph objects, which are placed over 1400~OSDs on approximately 230~SNs. i.e. data occupies approximately 6 OSDs per SN and a large (say 10~GiB) is likely to be distributed across most SNs of the ceph cluster. 
 %
 \begin{figure}[h]
 \centering
@@ -84,15 +84,15 @@ In practice, with the implementation for ECHO, this means that a file writen to 
 
 \section{XRootD and data access\label{sec:xrd}}
 While Ceph provides the storage backend, an interface is required for clients to interact with it. XRootD~\cite{xrootd} provides a lightweight and flexible framework that satifies the needs for WLCG and other communities. In addition, its plugin style design allowed for the development of the XrdCeph plugin~\cite{libradosstriper} to bridge between XRootD and the rados layer of Ceph. 
-XrdCeph inherites from the {\em XrdOss} layer to provide this interface and to also present a restricted set of operations. For example, as an object has no concept of directory hierarchy, and as a listing over all object in a (large) ceph pool is prohibitly expensive, no possibly to list files is available. Similarly, as a rename operation is effectivly a copy to a new name, with resultant movement of data across to new OSDs and placement groups, this is also a non implemented feature. 
+XrdCeph inherites from the {\em XrdOss} layer to provide this interface and to also present a restricted set of access operations. For example, as an object has no concept of directory hierarchy, and as a listing over all object in a (large) ceph pool is prohibitly expensive, no possibly to list files is available. Similarly, as a rename operation is effectivly a copy to a new name, with resultant movement of data across to new OSDs and placement groups, this is also a non implemented feature. 
 XrdCeph uses the libradosstriper library of Ceph. This provides for mostly atomicaly correct behaviour, however, and as will be discussed below, due it locking and unlocking behaviour is not always optimal for small reads. In the case of high-energy physics, the majority of use-cases are Write Once, Read Many (WORM) requests. 
 
-\subsection{XRootD architecture for ECHO\label{xrootdsetup}}
+% \subsection{XRootD architecture for ECHO\label{xrootdsetup}}
 
 
 \section{Improving performance for Run-3 and beyond\label{sec:requirements}}
 With the evolution to run-3 and improvements and changes in other layers of the middleware, ECHO (including XrdCeph) has needed adapt to these changes. 
-These changes include the deprication of GridFTP, in favour of WebDAV, resulting in signficant usage of XrdCeph compared to the GridFTP implementation~\cite{gridftpplugin,dewhurst2017deployment}. The use of paged reads and wrties in xroot protocol transfers, which effectively moved from (typcially) 8~MiB reads and writes to small ($<100kb$) reads and writes. Here, and with the design of libradosstriper and XrdCeph, small reads and writes are not efficient against Ceph, due to the locking and unlocking behaviour. 
+These changes include the deprication of GridFTP, in favour of WebDAV, resulting in signficant usage of XrdCeph compared to the GridFTP implementation~\cite{gridftpplugin,dewhurst2017deployment}. The use of paged reads and wrties in xroot protocol transfers, which effectively moves reads and writes to small ($<100kb$) reads and writes from (typcially) 8~MiB blocks. Here, and with the design of libradosstriper and XrdCeph, small reads and writes were not efficient against Ceph, due to its locking and unlocking behaviour. 
 
 With the initial design of XrdCeph vector reads\footnote{Vector reads are typically used in direct access from jobs running on worker nodes to access directly only the bytes of data that are useful for the client, rather than downloading the entire file.} are not supported in XrdCeph, which means that for requests of sparse reads, these reads were unfolded into a set of small read requests, and hence suffered from significant overheads.
 
@@ -101,7 +101,7 @@ Secondly, for reads, it should be possible to bypass the locking and unlocking b
 
 \subsection{Buffering in XrdCeph\label{buffer}}
 The performance of introducing a buffer into the XrdCeph layer is showin in Fig.~\ref{fig:buffering}.
-For davs, reads and writes are typically requested (within the XRootD framework) in 1~MiB blocks. For root protocol transfers, these requests can range from approximately $64kb$ for paged requests to 8~MiB. The plots show the performance for single file transfers in a development cluster environment. In production, a buffer size of 16~MiB was empirically found to optimise throughput and memory usage. This approach is fully efficient for cases where the whole file is read. In cases where on small and sparse sections of the file is read, this appoach can lead to inefficiencies in reading uncessary data. 
+For davs, reads and writes are typically requested (within the XRootD framework) in 1~MiB blocks. For root protocol transfers, these requests can range from approximately $64kb$ for paged requests to 8~MiB. The plots show the performance for single file transfers in a development cluster environment. In production, a buffer size of 16~MiB was empirically found to optimise throughput and memory usage. This approach is fully efficient (in terms of data read from Ceph) for cases where the whole file is read. In cases where on small and sparse sections of the file is read, this appoach can lead to inefficiencies in reading uncessary data. 
 With this buffering, no attempt was made to buffer explicit vector read requests for this reason. 
 %
 \begin{figure}[h]
@@ -114,7 +114,7 @@ With this buffering, no attempt was made to buffer explicit vector read requests
 
 \subsection{Striperless reads and read vector implementation\label{sec:striperless}}
 The second strategy employed to improve throughput for reads and vector reads (write requests are not touched by these changes) was to remove libradosstriper -- removing the locking and unlocking steps -- and to implement efficient vector read support. 
-Technicaly, some aspects of libradosstriper are reimplemented, such as the functionality to map between a read's offset and size to the individual ceph object(s) and the local offset and size for each object, noting that a read could cover multiple objects. The removal of locking for reads has very limited practical concerns, given the WORM nature of operations.
+Technicaly, some aspects of libradosstriper are reimplemented, such as the functionality to map between a read's offset and size onto the local offset and read lenght of each ceph object, noting that a read could cover multiple objects. The removal of locking for reads has very limited practical concerns, given the WORM nature of operations.
 
 In Fig.~\ref{fig:bufferingnostriper} the read data taken from Fig.~\ref{fig:buffering} is shown, together with data taken using the non-striper reads, for differing sizes of buffer. While the data suggests that the non-striper implementation is most performant with no -- or very small -- buffer sizes, when tested in the production environment, the large number of small reads could still have a negative impact on the performance of the buffer, hence it is still useful to keep some degree of buffering. 
 %
@@ -180,9 +180,9 @@ By transitioning from a DNS round-robin to actively managed CMSD setup it is hop
 
 
 \section{Summary\label{summary}}
-In summary, the ECHO cluster, comprising of XRootD and Ceph, based at RAL, plays a pivotal role in supporting the data needs of the WLCG and other data-intensive organisations, enabling efficient data distribution, archival, and ensuring data reliability. The combination of XRootD and Ceph technologies provides a versatile and scalable solution that aligns with the demanding requirements of high-energy physics experiments currently at the LHC, and to scale to HL-LHC requirements. 
-While scaling of the storage itself and horizontal scaling of the number of XRootD servers (acting as gateways) is necessary, it is demonstrated that improvements to the architecture and internal software are also necessary to provide efficient, reliable, and cost effective solutions to these needed. 
-The improvements shown here for read, write and metadata operations, together with improved failover and loadbalancing support, are largely already in place for production opperations, and demonstrating improved resiliance. 
+In summary, the ECHO cluster, based at RAL, comprising of XRootD and Ceph,  plays a pivotal role in supporting the data needs of the WLCG and other data-intensive organisations, enabling efficient data distribution, archival, and ensuring data reliability. The combination of XRootD and Ceph technologies provides a versatile and scalable solution that aligns with the demanding requirements of high-energy physics experiments currently at the LHC, and to scale to HL-LHC requirements. 
+While scaling of the storage volume itself, and the horizontal scaling of the number of XRootD servers (acting as gateways) is necessary, it is demonstrated that improvements to the architecture and internal software are also necessary to provide efficient, reliable, and cost effective solutions. 
+The improvements shown here for read, write and metadata operations, together with improved failover and loadbalancing support, are largely already in place for production opperations, and are demonstrating improved resiliance. 
 ECHO already supports LHC and other experiments, and will continue to grow to ensure their future demands. 
 
 
